@@ -9,6 +9,61 @@ namespace DipCoatingGUI.Models
     class ControllerViewModel : INotifyPropertyChanged
     {
         private double _numCycles = 5;
+        private double _armSetpoint = 100;
+        private string _connectionStatus;
+        private string _connectButtonText;
+        private string _startStopButtonText;
+
+        public string StartStopButtonText
+        {
+            get => _startStopButtonText;
+            set
+            {
+                if (_startStopButtonText != value)
+                {
+                    _startStopButtonText = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+        public string ConnectButtonText
+        {
+            get => _connectButtonText;
+            set
+            {
+                if (_connectButtonText != value)
+                {
+                    _connectButtonText = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public string ConnectionStatus
+        {
+            get => _connectionStatus;
+            set
+            {
+                if (_connectionStatus != value)
+                {
+                    _connectionStatus = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public double ArmSetpoint
+        {
+            get => _armSetpoint;
+            set
+            {
+                if (_armSetpoint != value)
+                {
+                    _armSetpoint = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
 
         public double NumCycles
         {
@@ -21,8 +76,6 @@ namespace DipCoatingGUI.Models
                 }
             }
         }
-        
-
 
         public event PropertyChangedEventHandler PropertyChanged;
 
