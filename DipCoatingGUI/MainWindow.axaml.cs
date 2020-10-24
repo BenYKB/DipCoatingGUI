@@ -7,8 +7,11 @@ using DipCoatingGUI.Models;
 using Phidget22;
 using Phidget22.Events;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Linq.Expressions;
+using System.Text;
 
 namespace DipCoatingGUI
 {
@@ -30,35 +33,53 @@ namespace DipCoatingGUI
     public class MainWindow : Window
     {
         public bool IsAtSetpoint;
-        public bool IsPhidgetConnected;
         public NumericUpDown NumberOfCycles;
+        private const double TICK_MILLESECONDS = 250;
         private const string START_STOP_BUTTON_STARTED = "Stop";
         private const string START_STOP_BUTTON_STOPPED = "Start";
         private const string CONNECT_BUTTON_CONNECTED_MSG = "-Already Connected-";
         private const string CONNECT_BUTTON_DISCONNECTED_MSG = "Connect";
-        private const string CONNECT_LABEL_CONNECTED_TEXT_MSG = "Servo Controller Connected";
-        private const string CONNECT_LABEL_DISCONNECTED_TEXT_MSG = "Servo Controller Disconnected";
-        private const double DEFAULT_SETPOINT = 50;
-        private const double ARM_MAX = 89;
+        private const string CONNECT_LABEL_CONNECTED_TEXT_MSG = "Servo Controller: Connected";
+        private const string CONNECT_LABEL_DISCONNECTED_TEXT_MSG = "Servo Controller: Disconnected";
+        private const string CONNECTED_COLOR = "LightGreen";
+        private const string DISCONNECTED_COLOR = "Red";
+        private const double ARM_MAX = 90;
         private const double ARM_RETRACT = 89;
         private const double ARM_UP = 72;
         private const double ARM_DOWN = 35;
         private const double ARM_MIN = 32;
+        private const double ARM_MID = (ARM_UP + ARM_DOWN + 1) / 2;
         private const double POSITION_AT_MAX_PULSEWIDTH = 180;
         private const double POSITION_AT_MIN_PULSEWIDTH = 0;
         private const double SMALL_ANGLE = 0.5;
         private const int CONNECTION_TIMEOUT = 2000;
         private RCServo servo;
-        private Stopwatch stopWatch;
         private double TargetPosition;
         private int ticks;
         private DispatcherTimer timer;
 
+        private const double STARTING_WAIT_TIME = 2;
+        private bool isAutomatedCommand = false;
+        private int [] automationParameters;
+
+        private enum States{
+            DOWN,
+            TRANSIT,
+            UP,
+            START,
+            DONE
+        }
+
+        private States currentState;
+        private States previousState;
+        private int currentCycleRemaining;
+        private double secondsUntilNextTransition;
+
+
         public MainWindow()
         {
             InitializeComponent();
-            TargetPosition = DEFAULT_SETPOINT;
-            IsPhidgetConnected = false;
+            TargetPosition = ARM_MID;
             DataContext = new ControllerViewModel();
             SetDataContextDefaults();
             SetupPhidget();
@@ -75,14 +96,42 @@ namespace DipCoatingGUI
             {
                 var context = (ControllerViewModel)DataContext;
                 context.StartStopButtonText = START_STOP_BUTTON_STOPPED;
-                context.ArmSetpoint = DEFAULT_SETPOINT;
+                context.ArmSetpoint = ARM_MID;
             });
+        }
 
-            UpdateConnectionStatus(false);
+        public void onRetractButtonClick(object sender, RoutedEventArgs e)
+        {
+            if (!isAutomatedCommand)
+            {
+                ServoCommand(ARM_RETRACT);
+            }
+        }
+
+        public void onUpPositionButtonClick(object sender, RoutedEventArgs e)
+        {
+            if (!isAutomatedCommand)
+            {
+                ServoCommand(ARM_UP);
+            }
+        }
+
+        public void onDownPositionClick(object sender, RoutedEventArgs e)
+        {
+            if (!isAutomatedCommand)
+            {
+                ServoCommand(ARM_DOWN);
+            }
         }
 
         public void onConnectClick(object sender, RoutedEventArgs e)
         {
+            if (servo == null || servo.Attached)
+            {
+                UpdateConnectionStatus();
+                return;
+            }
+
             try
             {
                 servo.Open(CONNECTION_TIMEOUT);
@@ -92,14 +141,15 @@ namespace DipCoatingGUI
                 Debug.WriteLine($"Failed to connect phidget with msg {ex}");
             }
 
-            UpdateConnectionStatus(servo.Attached);
+            UpdateConnectionStatus();
         }
 
         public void onDownButtonClick(object sender, RoutedEventArgs e)
         {
-            var button = (Button)sender;
-
-            ServoCommand(TargetPosition - 1);
+            if (!isAutomatedCommand)
+            {
+                ServoCommand(TargetPosition - 1);
+            }
         }
 
         public void OnMainWindowClosing(object sender, CancelEventArgs e)
@@ -110,8 +160,11 @@ namespace DipCoatingGUI
             {
                 try
                 {
-                    servo.Engaged = false;
-                    servo.Close();
+                    if (servo.Attached)
+                    {
+                        servo.Engaged = false;
+                        servo.Close();
+                    }
                 } 
                 catch(PhidgetException exp)
                 {
@@ -122,14 +175,171 @@ namespace DipCoatingGUI
 
         public void onStartStop(object sender, RoutedEventArgs e)
         {
-            var button = (Button)sender;
+            isAutomatedCommand = !isAutomatedCommand;
+
+            if (isAutomatedCommand)
+            {
+                if (servo.Attached)
+                {
+                    var context = (ControllerViewModel)DataContext;
+                    automationParameters = new int[] { (int)context.NumCycles , (int)context.SecondsDown , (int)context.MinutesUp };
+                    currentCycleRemaining = automationParameters[0];
+                    secondsUntilNextTransition = STARTING_WAIT_TIME;
+                    ServoCommand(ARM_UP);
+                    previousState = States.START;
+                    currentState = States.TRANSIT;
+                }
+                else
+                {
+                    isAutomatedCommand = false;
+                    DelegateUIStatusUpdate("Cannot start: Servo Disconnected");
+                }
+            }
+            else
+            {
+                servo.Engaged = false;
+                DelegateUIStatusUpdate("Operation Cancelled: Servo Stopped");
+            }
+            updateStartStopButton(isAutomatedCommand);
         }
+
+        private void onTick(object sender, EventArgs e)
+        {
+            ticks += 1;
+            UpdateConnectionStatus();
+
+            if (isAutomatedCommand)
+            {
+                if (IsAtSetpoint)
+                {
+                    if (currentState == States.DOWN)
+                    {
+                        secondsUntilNextTransition -= TICK_MILLESECONDS /1000.0;
+                        if (secondsUntilNextTransition <= 0)
+                        {
+                            ServoCommand(ARM_UP);
+                            previousState = States.DOWN;
+                            currentState = States.TRANSIT;
+                        }
+                    }
+                    else if (currentState == States.TRANSIT)
+                    {
+                        if (TargetPosition == ARM_UP)
+                        {
+                            if (previousState == States.START)
+                            {
+                                ServoCommand(ARM_DOWN);
+                                previousState = States.UP;
+                                currentState = States.TRANSIT;
+                            }
+                            else
+                            {
+                                secondsUntilNextTransition = automationParameters[2] * 60;
+                                previousState = States.TRANSIT;
+                                currentState = States.UP;
+                            }        
+                        } 
+                        else if (TargetPosition == ARM_DOWN)
+                        {
+                            secondsUntilNextTransition = automationParameters[1];
+                            previousState = States.TRANSIT;
+                            currentState = States.DOWN;
+                        } 
+                        else
+                        {
+                            throw new Exception("Target Position Invalid for Automated Command");
+                        }
+                    }
+                    else if (currentState == States.UP)
+                    {
+                        secondsUntilNextTransition -= TICK_MILLESECONDS / 1000.0;
+                        if (secondsUntilNextTransition <= 0)
+                        {
+                            currentCycleRemaining -= 1;
+                            if (currentCycleRemaining <= 0)
+                            {
+                                previousState = currentState;
+                                currentState = States.DONE; 
+                                isAutomatedCommand = false;
+                                updateStartStopButton(isAutomatedCommand);
+                            }
+                            else
+                            {
+                                ServoCommand(ARM_DOWN);
+                                previousState = States.UP;
+                                currentState = States.TRANSIT;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        throw new Exception($"Invalid State {currentState}");
+                    }
+                }
+
+             UpdateStatusUI(currentState, currentCycleRemaining, secondsUntilNextTransition);
+            }
+        }
+
+        private void UpdateStatusUI(States state, int cyclesRemaining, double secondsLeft)
+        {
+            StringBuilder msg = new StringBuilder();
+            msg.Append($"{cyclesRemaining} of { automationParameters[0]} cycles remain\n");
+                
+                
+            if (state == States.START)
+            {
+                msg.Append("Starting Operation");
+            }
+            else if (state == States.DOWN)
+            {
+                msg.Append($"{secondsLeft} s of ({automationParameters[1]} s) remain in down position");
+            }
+            else if (state == States.TRANSIT)
+            {
+                msg.Append("In transit");
+            }
+            else if (state == States.UP)
+            {
+                msg.Append($"{(int)secondsLeft} s of {automationParameters[2]} minutes remain in up position");
+            }
+            else if (state == States.DONE)
+            {
+                msg.Append("Finished Operation");
+            }
+            else
+            {
+                throw new Exception($"Invalid state {state}");
+            }
+
+            DelegateUIStatusUpdate(msg.ToString());
+        }
+
+        private void DelegateUIStatusUpdate(string msg)
+        {
+            var uiThread = Dispatcher.UIThread;
+            uiThread.InvokeAsync(delegate
+            {
+                ((ControllerViewModel)DataContext).StatusMessage = msg;
+            });
+        }
+
+        private void updateStartStopButton(bool isStarted)
+        {
+            var uiThread = Dispatcher.UIThread;
+            uiThread.InvokeAsync(delegate {
+                ((ControllerViewModel)this.DataContext).StartStopButtonText = isStarted ? START_STOP_BUTTON_STARTED : START_STOP_BUTTON_STOPPED;
+            });
+        }
+
+
 
         public void onUpButtonClick(object sender, RoutedEventArgs e)
         {
-            var button = (Button)sender;
-
-            ServoCommand(TargetPosition + 1);
+            if (!isAutomatedCommand)
+            {
+                ServoCommand(TargetPosition + 1);
+            }
         }
 
         public void SetupPhidget()
@@ -150,19 +360,27 @@ namespace DipCoatingGUI
                 Debug.WriteLine($"Failed to connect phidget with msg {e}");
             }
 
-            UpdateConnectionStatus(servo.Attached);
+            UpdateConnectionStatus();
         }
 
-        public void UpdateConnectionStatus(bool isConnected)
+        public void UpdateConnectionStatus()
         {
-            IsPhidgetConnected = isConnected;
-
-            var uiThread = Dispatcher.UIThread;
-            uiThread.InvokeAsync(delegate
+            if (servo != null)
             {
-                ((ControllerViewModel)this.DataContext).ConnectButtonText = isConnected ? CONNECT_BUTTON_CONNECTED_MSG : CONNECT_BUTTON_DISCONNECTED_MSG;
-                ((ControllerViewModel)this.DataContext).ConnectionStatus = isConnected ? CONNECT_LABEL_CONNECTED_TEXT_MSG : CONNECT_LABEL_DISCONNECTED_TEXT_MSG;
-            });
+                var isConnected = servo.Attached;
+
+                var uiThread = Dispatcher.UIThread;
+                uiThread.InvokeAsync(delegate {
+                    var context = (ControllerViewModel)this.DataContext;
+                    context.ConnectButtonText = isConnected ? CONNECT_BUTTON_CONNECTED_MSG : CONNECT_BUTTON_DISCONNECTED_MSG;
+                    context.ConnectionStatus = isConnected ? CONNECT_LABEL_CONNECTED_TEXT_MSG : CONNECT_LABEL_DISCONNECTED_TEXT_MSG;
+                    context.ConnectionColor = isConnected ? CONNECTED_COLOR : DISCONNECTED_COLOR;
+                });
+            }
+            else
+            {
+                Debug.WriteLine("No servo reference set");
+            }
         }
 
         private void AsyncCallBackForSetTargetPosition(IAsyncResult result)
@@ -184,14 +402,9 @@ namespace DipCoatingGUI
 
             NumberOfCycles = new NumericUpDown();
             ticks = 0;
-            timer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Normal, onTick);
+            timer = new DispatcherTimer(TimeSpan.FromMilliseconds(TICK_MILLESECONDS), DispatcherPriority.Normal, onTick);
             timer.Start();
             Debug.WriteLine("Started Timer");
-        }
-
-        private void onTick(object sender, EventArgs e)
-        {
-            ticks += 1;
         }
 
         public void Servo_Attach(object sender, AttachEventArgs e)
@@ -208,12 +421,12 @@ namespace DipCoatingGUI
             servo.TargetPosition = TargetPosition;
             servo.Engaged = true;
 
-            UpdateConnectionStatus(true);
+            UpdateConnectionStatus();
         }
 
         private void Servo_Detach(object sender, DetachEventArgs e)
         {
-            UpdateConnectionStatus(false);
+            UpdateConnectionStatus();
         }
 
         private void Servo_TargetPositionReached(object sender, RCServoTargetPositionReachedEventArgs e)
@@ -223,19 +436,32 @@ namespace DipCoatingGUI
                 IsAtSetpoint = true;
             }
         }
+
+        private void UpdateArmSetpointUI(double setpoint)
+        {
+            var uiThread = Dispatcher.UIThread;
+
+            uiThread.InvokeAsync(delegate
+            {
+                ((ControllerViewModel)DataContext).ArmSetpoint = setpoint;
+            });
+        }
+
         private void ServoCommand(double position)
         {
             if (ARM_MIN < position && position < ARM_MAX)
             {
-                if (IsPhidgetConnected)
+                if (servo.Attached)
                 {
                     try
                     {
+                        servo.Engaged = true;
                         AsyncCallback asyncCallBackDelegate = new AsyncCallback(AsyncCallBackForSetTargetPosition);
                         CallBackInfo callBackInfo = new CallBackInfo(servo, position);
-                        servo.BeginSetTargetPosition(position, asyncCallBackDelegate, callBackInfo);
                         TargetPosition = position;
-                        ((ControllerViewModel)this.DataContext).ArmSetpoint = TargetPosition;
+                        IsAtSetpoint = false;
+                        UpdateArmSetpointUI(TargetPosition);
+                        servo.BeginSetTargetPosition(position, asyncCallBackDelegate, callBackInfo);
                     }
                     catch (Exception e)
                     {
@@ -249,7 +475,7 @@ namespace DipCoatingGUI
             }
             else
             {
-                Debug.WriteLine($"Postion {position} out of bounds {MIN_ANGLE}-{MAX_ANGLE}");
+                Debug.WriteLine($"Postion {position} out of bounds {ARM_MIN}-{ARM_MAX}");
             }
         }
     }
