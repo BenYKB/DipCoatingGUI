@@ -5,7 +5,7 @@
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
         x:Class="DipCoatingGUI.MainWindow"
         Title="DipCoatingGUI"
-		FontSize="20"
+		FontSize="25"
 		SizeToContent="WidthAndHeight"
 		Closing="OnMainWindowClosing">
 	<StackPanel Orientation="Horizontal">
@@ -28,15 +28,15 @@
 			</StackPanel>
 			<StackPanel Background="{Binding ConnectionColor}">
 				<TextBlock Name="ConnectionStatus" Text="{Binding ConnectionStatus}"></TextBlock>
-				<Button Name="ConnectPhidget" Click="onConnectClick" Content="{Binding ConnectButtonText}" Margin="5,2" Width="200">Connect</Button>
+				<Button Name="ConnectPhidget" Click="onConnectClick" Content="{Binding ConnectButtonText}" Margin="5,2" Width="250">Connect</Button>
 			</StackPanel>
 		</StackPanel>
-		<Grid ColumnDefinitions="200,100" RowDefinitions="50,70,70,70,20,90,60" Background="WhiteSmoke">
+		<Grid ColumnDefinitions="230,100" RowDefinitions="50,70,70,70,20,90,60" Background="WhiteSmoke">
 			<TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" FontWeight="Bold">Automated Controls</TextBlock>
 			<TextBlock Grid.Row="1" Grid.Column="0">Number of Cycles:</TextBlock>
 			<NumericUpDown Grid.Row="1" Grid.Column="1" Name="NumCycles" Value="{Binding NumCycles}" Width="100" Maximum="100" Minimum="1" MinHeight="40"></NumericUpDown>
 			<TextBlock Grid.Row="2" Grid.Column="0">Seconds Down:</TextBlock>
-			<NumericUpDown Grid.Row="2" Grid.Column="1" Name="SecondsDown" Value="{Binding SecondsDown}" Width="100" Maximum="200" Minimum="1" MinHeight="40"></NumericUpDown>
+			<NumericUpDown Grid.Row="2" Grid.Column="1" Name="SecondsDown" Value="{Binding SecondsDown}" Width="100" Maximum="200" Minimum="0.5" MinHeight="40" Increment="0.5"></NumericUpDown>
 			<TextBlock Grid.Row="3" Grid.Column="0" >Minutes Up:</TextBlock>
 			<NumericUpDown Grid.Row="3" Grid.Column="1" Name="MinutesUp" Value="{Binding MinutesUp}" Width="100" Maximum="100" Minimum="1" MinHeight="40"></NumericUpDown>
 			<TextBlock Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" Name="StatusMsg" Text="{Binding StatusMessage}" TextWrapping="Wrap"></TextBlock>
